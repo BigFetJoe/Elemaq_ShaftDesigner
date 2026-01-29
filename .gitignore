@@ -1,0 +1,8 @@
+# Ignore everything in root
+/*
+
+# Keep gitignore
+!.gitignore
+
+# Keep Shaft_designer directory and its contents
+!/Shaft_designer/
