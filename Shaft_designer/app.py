@@ -1,7 +1,14 @@
+
 import streamlit as st
 import os
+import sys
+
+# Ensure the project root is in the path so we can import 'src'
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
 from src.models.geometry import Shaft
 from src.ui.sidebar import render_sidebar
+from src.ui.editor import render_editor, update_shaft_model
 from src.ui.visualization import plot_shaft_3d, plot_diagrams
 import plotly.graph_objects as go
 
@@ -23,17 +30,24 @@ def main():
     
     shaft = st.session_state.shaft
     
-    # Render Sidebar Interface
-    render_sidebar(shaft)
+    # 1. Global Config (Sidebar)
+    config = render_sidebar(shaft)
     
-    # --- Main Layout ---
+    # 2. Update Model based on State & Config
+    # This ensures the shaft object is up-to-date with inputs even if they are hidden
+    update_shaft_model(shaft, config)
     
-    # Top Section: 3D Visualization
+    # 3. Visualization
     st.subheader("Model Visualization")
     fig_3d = plot_shaft_3d(shaft)
     st.plotly_chart(fig_3d, use_container_width=True)
     
+    # 4. Detailed Editor
+    render_editor(shaft, config)
+    
     st.markdown("---")
+    
+
     
     # Bottom Section: Analysis
     st.subheader("Analysis Results")

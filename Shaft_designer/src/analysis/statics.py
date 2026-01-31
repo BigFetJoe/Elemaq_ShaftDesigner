@@ -44,7 +44,10 @@ def calculate_reactions(shaft: Shaft) -> Dict[str, Tuple[float, float]]:
     sum_moment_A_planeXY = 0.0
     sum_force_Y = 0.0
     
-    for force in shaft.forces:
+    # Aggregating all loads
+    all_forces, _ = shaft.get_all_loads()
+
+    for force in all_forces:
         dist = force.position - pos_A
         # Moment caused by Fy at distance 'dist'
         # Clockwise is negative? Let's use standard mechanics: Counter-Clockwise +
@@ -77,7 +80,7 @@ def calculate_reactions(shaft: Shaft) -> Dict[str, Tuple[float, float]]:
     sum_moment_A_planeXZ = 0.0
     sum_force_Z = 0.0
     
-    for force in shaft.forces:
+    for force in all_forces:
         dist = force.position - pos_A
         sum_moment_A_planeXZ += force.fz * dist
         sum_force_Z += force.fz
@@ -127,14 +130,17 @@ def calculate_diagrams(shaft: Shaft, num_points: int = 200):
     Vy += Ray * macaulay(x, pos_A, 0)
     Vy += Rby * macaulay(x, pos_B, 0)
     # Loads
-    for f in shaft.forces:
+    # Recalculate loads for diagrams
+    all_forces, all_torques = shaft.get_all_loads()
+
+    for f in all_forces:
         Vy += f.fy * macaulay(x, f.position, 0)
         
     # Plane XZ
     Vz = np.zeros_like(x)
     Vz += Raz * macaulay(x, pos_A, 0)
     Vz += Rbz * macaulay(x, pos_B, 0)
-    for f in shaft.forces:
+    for f in all_forces:
         Vz += f.fz * macaulay(x, f.position, 0)
         
     # Total Shear Magnitude
@@ -149,14 +155,14 @@ def calculate_diagrams(shaft: Shaft, num_points: int = 200):
     My_bending = np.zeros_like(x) # Moment caused by Vertical forces (bending in vertical plane)
     My_bending += Ray * macaulay(x, pos_A, 1)
     My_bending += Rby * macaulay(x, pos_B, 1)
-    for f in shaft.forces:
+    for f in all_forces:
         My_bending += f.fy * macaulay(x, f.position, 1)
         
     # Plane XZ (My - Moment about Y axis due to Z forces)
     Mz_bending = np.zeros_like(x)
     Mz_bending += Raz * macaulay(x, pos_A, 1)
     Mz_bending += Rbz * macaulay(x, pos_B, 1)
-    for f in shaft.forces:
+    for f in all_forces:
         Mz_bending += f.fz * macaulay(x, f.position, 1)
         
     # Total Bending Moment Magnitude
@@ -166,7 +172,7 @@ def calculate_diagrams(shaft: Shaft, num_points: int = 200):
     Tx = np.zeros_like(x)
     # Torques are just steps: T_applied * <x-a>^0 ??
     # Actually Torque diagram is sum of torques to left.
-    for t in shaft.torques:
+    for t in all_torques:
         # Sign convention?
         # Let's assume input is moment vector magnitude.
         # Simplest: Sum of (Magnitude * <x-pos>^0)
