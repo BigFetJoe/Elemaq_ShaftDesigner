@@ -47,16 +47,49 @@ def main():
     
     st.markdown("---")
     
-
-    
     # Bottom Section: Analysis
     st.subheader("Analysis Results")
     
     # Run Analysis Button
     from src.analysis.statics import calculate_diagrams
+    from src.analysis.optimization import optimize_shaft
     
-    if st.button("Calculate Analysis", type="primary", use_container_width=True):
-        x, V, M, T = calculate_diagrams(shaft)
+    col_anal_1, col_anal_2 = st.columns([1, 1])
+    
+    with col_anal_1:
+        run_analysis = st.button("Calculate Analysis", type="primary", use_container_width=True)
+        
+    with col_anal_2:
+        auto_dim = st.button("Auto-Dimension Shaft ✨", type="secondary", use_container_width=True, help="Automatically adjusts diameters to meet Safety Factor")
+        
+    if auto_dim:
+        with st.spinner("Optimizing shaft dimensions..."):
+            # Pass safety factor from config or sidebar
+            sf_val = config.get('safety_factor', 2.0)
+            result = optimize_shaft(shaft, safety_factor=sf_val)
+            
+            if result['success']:
+                st.success("Optimization Complete! Shaft updated.")
+                st.session_state['optimization_log'] = result['log']
+                st.rerun()
+            else:
+                st.error(f"Optimization Failed: {result.get('message')}")
+    
+    if run_analysis:
+        # UPDATED UNPACKING: 6 values
+        x, V, Ma, Mm, Ta, Tm = calculate_diagrams(shaft)
+        
+        # Combine for simplified Summary/Display
+        # Total Moment Magnitude (at each point)
+        # Note: Ma is alternating, Mm is mean. Max moment overall?
+        # Usually we care about Ma for fatigue.
+        # But for 'Max Bending Moment' metric, let's show Max(Ma + Mm) or just Max(Ma) if rotating?
+        # Let's show Max Alternating Moment as it's the critical one for rotating shafts.
+        M_display = Ma
+        T_display = Tm # Usually torque is mean driven. 
+        if max(abs(Ta)) > 0:
+            T_display = Ta + Tm # Fallback for metric?
+            
         
         if len(x) > 0:
             # Create Tabs for Results
@@ -64,18 +97,32 @@ def main():
             
             with tab_summary:
                 # Metric Summary
-                max_moment = max(abs(M)) if len(M) > 0 else 0
+                # M is in Nmm
+                max_ma_nmm = max(abs(Ma)) if len(Ma) > 0 else 0
+                max_ma_nm = max_ma_nmm / 1000.0
+                
                 max_shear = max(abs(V)) if len(V) > 0 else 0
-                max_torque = max(abs(T)) if len(T) > 0 else 0
+                max_torque = max(abs(T_display)) if len(T_display) > 0 else 0
                 
                 c1, c2, c3 = st.columns(3)
-                c1.metric("Max Bending Moment", f"{max_moment:.2f} Nm")
+                c1.metric("Max Alternating Moment", f"{max_ma_nm:.2f} Nm")
                 c2.metric("Max Shear Force", f"{max_shear:.2f} N")
                 c3.metric("Max Torque", f"{max_torque:.2f} Nm")
                 
             with tab_diagrams:
                 # Plot Interactive Diagrams
-                fig_diagrams = plot_diagrams(x, V, M, T)
+                # Convert M to Nm for plotting to be consistent
+                # plot_diagrams expects x, V, M, T.
+                # We can perform a clever trick: plot separate traces in plot_diagrams if we updated it,
+                # or just plot the dominant ones.
+                # For now, pass Ma as "Bending Moment" and Tm as "Torque".
+                # TODO: Update plot_diagrams to show Mean/Alt if needed.
+                
+                Ma_nm = Ma / 1000.0
+                # Mm_nm = Mm / 1000.0
+                
+                # We pass Ma as the primary 'Moment' because that's what designers look for in rotating shafts.
+                fig_diagrams = plot_diagrams(x, V, Ma_nm, T_display)
                 st.plotly_chart(fig_diagrams, use_container_width=True)
                 
             with tab_fatigue:
@@ -88,10 +135,46 @@ def main():
                     
                     # Calculate Min Diameter at each point
                     d_min_list = []
-                    for m_val, t_val in zip(M, T):
-                        # Conservative: Assume T is constant mean, M is fully reversed
-                        d = calculate_min_diameter(moment_amp=abs(m_val), torque_avg=abs(t_val), 
-                                                 Sut=Sut, Sy=Sy, n=2.0)
+                    
+                    # Gather Fatigue Config
+                    fatigue_config = {
+                        'surface': st.session_state.get('fatigue_surface', 'usinado'),
+                        'reliability': st.session_state.get('fatigue_reliability', '99%'),
+                        'temp': st.session_state.get('fatigue_temp', 20.0),
+                        'kf': st.session_state.get('fatigue_kf', 1.0)
+                    }
+                    
+                    for i in range(len(x)):
+                        # Get local stress components (Nmm for moments, Nm for torques? Check statics units)
+                        # statics.py sums: force(N) * dist(mm) = Nmm.
+                        # so Ma, Mm are Nmm.
+                        # Torques: inputs were Nm usually?
+                        # loads.py: Torque magnitude. If input in UI is Nm...
+                        # In editor.py: `cols[1].number_input(f"Mag (N.m)", ...)`
+                        # So Torque is Nm.
+                        # Wait, consistently?
+                        # `statics.py`: `Tx += t.magnitude * ...`.
+                        # If t.magnitude is Nm, then T(x) is Nm.
+                        # Force is N, pos is mm. Moment is Nmm.
+                        # We must be careful.
+                        
+                        ma_val = Ma[i] # Nmm
+                        mm_val = Mm[i] # Nmm
+                        ta_val = Ta[i] # Nm (if input was Nm)
+                        tm_val = Tm[i] # Nm
+                        
+                        # Convert moments to Nm for fatigue func
+                        ma_nm = ma_val / 1000.0
+                        mm_nm = mm_val / 1000.0
+                        
+                        d = calculate_min_diameter(
+                            moment_amp=abs(ma_nm), 
+                            torque_mean=abs(tm_val),
+                            moment_mean=abs(mm_nm),
+                            torque_amp=abs(ta_val),
+                            Sut=Sut, Sy=Sy, n=2.0,
+                            fatigue_config=fatigue_config
+                        )
                         d_min_list.append(d)
                     
                     d_min_arr = np.array(d_min_list)
@@ -101,7 +184,7 @@ def main():
                     st.metric("Max Required Diameter (Factor of Safety = 2.0)", f"{max_d_req:.2f} mm")
                     
                     # Diameter Constraint Plot
-                    import pandas as pd
+                    
                     # Map 'x' back to current shaft design diameter
                     current_diameters = []
                     segments = shaft.get_segments()
@@ -113,10 +196,6 @@ def main():
                                 break
                         current_diameters.append(d_local)
                     
-                    # Use Plotly for this too for consistency? Or stick to simple chart for now?
-                    # Let's stick to st.line_chart for this specific comparison as it's quick, 
-                    # or better: upgrade to Plotly to match the theme.
-                    
                     fig_fatigue = go.Figure()
                     fig_fatigue.add_trace(go.Scatter(x=x, y=d_min_arr, mode='lines', name='Required Diameter', line=dict(color='red', dash='dash')))
                     fig_fatigue.add_trace(go.Scatter(x=x, y=current_diameters, mode='lines', name='Current Diameter', fill='tozeroy', line=dict(color='lightgrey')))
@@ -124,7 +203,7 @@ def main():
                     st.plotly_chart(fig_fatigue, use_container_width=True)
                 else:
                     st.warning("Select a material in the sidebar to run fatigue analysis.")
-
+ 
         else:
             st.error("Could not calculate diagrams. Please check shaft geometry and supports.")
     else:

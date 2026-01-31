@@ -1,6 +1,7 @@
 from typing import List, Tuple, Dict
 import numpy as np
-from src.models.geometry import Shaft, Bearing
+from src.models.geometry import Shaft
+from src.models.components import Bearing
 from src.models.loads import RadialForce, Torque
 from src.analysis.utils import macaulay
 
@@ -17,7 +18,6 @@ def calculate_reactions(shaft: Shaft) -> Dict[str, Tuple[float, float]]:
             bearings.append((node, node.element))
     
     if len(bearings) != 2:
-        # Return zeros or raise error. For MVP, return zeros if not exactly 2
         return {}
 
     node_A, support_A = bearings[0]
@@ -26,57 +26,25 @@ def calculate_reactions(shaft: Shaft) -> Dict[str, Tuple[float, float]]:
     pos_A = node_A.position
     pos_B = node_B.position
     
-    # Distance between bearings
     L_span = pos_B - pos_A
     if L_span == 0:
         return {support_A.name: (0,0), support_B.name: (0,0)}
 
-    # Sum of Moments about A = 0
-    # Sigma M_A = 0 => R_B * L_span - Sum(F_i * (pos_i - pos_A)) = 0
-    # R_B = Sum(F_i * (pos_i - pos_A)) / L_span
-    
-    sum_moment_y_A = 0.0 # From vertical forces (Fy) creating moment about Z? No, simpler:
-    # We analyze planes separately. 
-    # Plane XY (Vertical forces Fy, Moments Mz)
-    # Plane XZ (Horizontal forces Fz, Moments My)
-    
-    # 1. Plane XY (Vertical Loads Fy)
+    # Plane XY (Vertical Loads Fy)
     sum_moment_A_planeXY = 0.0
     sum_force_Y = 0.0
     
-    # Aggregating all loads
     all_forces, _ = shaft.get_all_loads()
 
     for force in all_forces:
         dist = force.position - pos_A
-        # Moment caused by Fy at distance 'dist'
-        # Clockwise is negative? Let's use standard mechanics: Counter-Clockwise +
-        # Force Fy upwards (+) causes CCW moment (+).
         sum_moment_A_planeXY += force.fy * dist
         sum_force_Y += force.fy
         
-    Ray = 0.0
-    Rby = 0.0
-    
-    # Rby * L_span - sum_moments_loads = 0 (assuming Rby upwards is +)
-    # Actually: sum(M) about A:
-    # Rby * L + Sum(Fi * di) = 0 ??
-    # Let's trust the statics: Sum M_A = 0
-    # Forces F_i at x_i.
-    # R_B * (xB - xA) + Sum( F_i * (xi - xA) ) = 0
-    # R_B = - Sum( F_i * (xi - xA) ) / L_span
-    
-    # But wait, external loads usually act DOWN (-y). 
-    # If load is -100N at L/2.
-    # R_B = - (-100 * L/2) / L = 50N. Correct.
-    
     Rby = - sum_moment_A_planeXY / L_span
-    
-    # Sum Fy = 0 => Ray + Rby + Sum(Fy) = 0
-    # Ray = - Rby - Sum(Fy)
     Ray = - Rby - sum_force_Y
     
-    # 2. Plane XZ (Horizontal Loads Fz)
+    # Plane XZ (Horizontal Loads Fz)
     sum_moment_A_planeXZ = 0.0
     sum_force_Z = 0.0
     
@@ -97,21 +65,32 @@ def calculate_reactions(shaft: Shaft) -> Dict[str, Tuple[float, float]]:
 
 def calculate_diagrams(shaft: Shaft, num_points: int = 200):
     """
-    Returns arrays for x positions, Shear (V), Moment (M), and Torque (T).
+    Returns arrays for x positions and separated stress diagrams.
+    Returns: (x, V_total, Ma, Mm, Ta, Tm)
+    - V_total: Total shear force magnitude (static).
+    - Ma: Alternating Bending Moment (from rotating bending).
+    - Mm: Mean Bending Moment (usually 0 for shafts).
+    - Ta: Alternating Torque.
+    - Tm: Mean Torque.
     """
     L = shaft.get_total_length()
     if L == 0:
-        return np.array([]), np.array([]), np.array([]), np.array([])
+        empty = np.array([])
+        return empty, empty, empty, empty, empty, empty
         
     x = np.linspace(0, L, num_points)
     
-    # Get reactions
     reactions = calculate_reactions(shaft)
     if not reactions:
-        return x, np.zeros_like(x), np.zeros_like(x), np.zeros_like(x)
+        z = np.zeros_like(x)
+        return x, z, z, z, z, z
         
     # Unpack basic layout
     bearings = [n for n in shaft.nodes if isinstance(n.element, Bearing)]
+    if len(bearings) < 2:
+         z = np.zeros_like(x)
+         return x, z, z, z, z, z
+
     pos_A = bearings[0].position
     pos_B = bearings[1].position
     name_A = bearings[0].element.name
@@ -120,66 +99,56 @@ def calculate_diagrams(shaft: Shaft, num_points: int = 200):
     (Ray, Raz) = reactions[name_A]
     (Rby, Rbz) = reactions[name_B]
     
-    # --- Shear Force V(x) ---
-    # V(x) = Sum of all forces to the left of x
-    # Singularity: V(x) = R * <x-a>^0 + F * <x-b>^0 ...
-    
-    # Plane XY
-    Vy = np.zeros_like(x)
-    # Reactions
-    Vy += Ray * macaulay(x, pos_A, 0)
-    Vy += Rby * macaulay(x, pos_B, 0)
-    # Loads
-    # Recalculate loads for diagrams
     all_forces, all_torques = shaft.get_all_loads()
 
+    # --- Shear Force V(x) ---
+    Vy = np.zeros_like(x)
+    Vy += Ray * macaulay(x, pos_A, 0)
+    Vy += Rby * macaulay(x, pos_B, 0)
     for f in all_forces:
         Vy += f.fy * macaulay(x, f.position, 0)
         
-    # Plane XZ
     Vz = np.zeros_like(x)
     Vz += Raz * macaulay(x, pos_A, 0)
     Vz += Rbz * macaulay(x, pos_B, 0)
     for f in all_forces:
         Vz += f.fz * macaulay(x, f.position, 0)
         
-    # Total Shear Magnitude
-    # V_total = sqrt(Vy^2 + Vz^2)
     V_total = np.sqrt(Vy**2 + Vz**2)
     
     # --- Bending Moment M(x) ---
-    # M(x) = Integral of V(x)
+    # Calculates the Static Bending Moment in space (My, Mz).
+    # For a rotating shaft, this static moment vector translates to a fully reversed (Alternating) moment cycle.
     
-    # Plane XY (Mz - Moment about Z axis due to Y forces)
-    # M(x) = R * <x-a>^1 + F * <x-b>^1
-    My_bending = np.zeros_like(x) # Moment caused by Vertical forces (bending in vertical plane)
+    My_bending = np.zeros_like(x)
     My_bending += Ray * macaulay(x, pos_A, 1)
     My_bending += Rby * macaulay(x, pos_B, 1)
     for f in all_forces:
         My_bending += f.fy * macaulay(x, f.position, 1)
         
-    # Plane XZ (My - Moment about Y axis due to Z forces)
     Mz_bending = np.zeros_like(x)
     Mz_bending += Raz * macaulay(x, pos_A, 1)
     Mz_bending += Rbz * macaulay(x, pos_B, 1)
     for f in all_forces:
         Mz_bending += f.fz * macaulay(x, f.position, 1)
         
-    # Total Bending Moment Magnitude
-    M_total = np.sqrt(My_bending**2 + Mz_bending**2)
+    # Resultant Bending Moment Magnitude
+    M_resultant = np.sqrt(My_bending**2 + Mz_bending**2)
+    
+    # Assign to Alternating vs Mean
+    # Unless we have specific "Mean Bending" loads (rare in shafts, usually from constant axial offset or similar? but axial is separate), 
+    # we assume ALL bending from transverse loads is Alternating.
+    Ma = M_resultant
+    Mm = np.zeros_like(x)
     
     # --- Torque T(x) ---
-    Tx = np.zeros_like(x)
-    # Torques are just steps: T_applied * <x-a>^0 ??
-    # Actually Torque diagram is sum of torques to left.
+    # Sum separate components suitable for Fatigue
+    Ta = np.zeros_like(x)
+    Tm = np.zeros_like(x)
+    
     for t in all_torques:
-        # Sign convention?
-        # Let's assume input is moment vector magnitude.
-        # Simplest: Sum of (Magnitude * <x-pos>^0)
-        Tx += t.magnitude * macaulay(x, t.position, 0)
+        # Step function from torque position
+        Ta += t.alternating * macaulay(x, t.position, 0)
+        Tm += t.mean * macaulay(x, t.position, 0)
     
-    # Correction: Static equilibrium for Torque requires Sum T = 0.
-    # If user inputs unbalanced torque, diagram will "fly".
-    # We won't auto-balance for now, just show what is.
-    
-    return x, V_total, M_total, Tx
+    return x, V_total, Ma, Mm, Ta, Tm

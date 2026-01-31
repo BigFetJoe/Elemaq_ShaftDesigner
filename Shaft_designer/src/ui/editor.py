@@ -1,210 +1,267 @@
 import streamlit as st
-from src.models.geometry import Shaft, Bearing, SpurGear, Pulley
+import uuid
+from src.models.geometry import Shaft, Bearing
+from src.models.components import SpurGear, Pulley, Component
 from src.models.loads import RadialForce, Torque
-from src.database.catalogs import get_next_standard_diameter, STANDARD_DIAMETERS
+from src.database.catalogs import STANDARD_DIAMETERS, get_next_standard_diameter
 
+# --- Feature Management Helpers ---
+def init_features():
+    if "features" not in st.session_state:
+        st.session_state.features = []
+
+def add_feature(ftype):
+    feat = {
+        "id": str(uuid.uuid4()),
+        "type": ftype,
+        "pos": 0.0,
+        "props": {}
+    }
+    # Initialize default props based on type
+    if ftype == "Shoulder":
+        feat["props"] = {"diameter": 20.0}
+    elif ftype == "Spur Gear":
+        feat["props"] = {"diameter": 100.0, "angle": 0.0, "power": 0.0, "rpm": 0.0, "manual_fy": 0.0, "manual_fz": 0.0}
+    elif ftype == "Pulley":
+        feat["props"] = {"diameter": 100.0, "power": 0.0, "rpm": 0.0, "manual_fy": 0.0, "manual_fz": 0.0, "manual_t": 0.0}
+    elif ftype == "Radial Force":
+        feat["props"] = {"mag": 100.0, "angle": 0.0}
+    elif ftype == "Torque":
+        feat["props"] = {"mag": 50.0, "type": "Mean"} # Alternating/Mean switch?
+        
+    st.session_state.features.append(feat)
+
+def remove_feature(idx):
+    st.session_state.features.pop(idx)
+
+# --- Shaft Builder Logic ---
 def update_shaft_model(shaft: Shaft, config: dict):
     """
-    Rebuilds the shaft model based on session_state values and global config.
-    Must be called before plotting to ensure visualization matches data.
+    Rebuilds the shaft model based on the Feature List.
     """
-    # --- 1. Geometry (Sections) ---
-    shaft.nodes = []
-    num_sections = config['num_sections']
+    shaft.reset()
     
-    # Retrieve or Initialize Start Diameter
+    total_len = config['total_length']
     start_diameter = st.session_state.get("start_diameter", 20.0)
     
-    # Add initial node
-    shaft.add_node(position=0.0, diameter_right=start_diameter)
+    features = st.session_state.get("features", [])
     
+    # 1. Geometry Construction (Shoulders define segments)
+    # Collect all points that define diameter changes + End points
+    # A "Shoulder" feature says: "From this position onwards, diameter is X"
+    
+    # We sort valid shoulders by position
+    shoulders = [f for f in features if f['type'] == 'Shoulder']
+    shoulders.sort(key=lambda x: x['pos'])
+    
+    # Validate positions
+    valid_shoulders = [s for s in shoulders if 0 < s['pos'] < total_len]
+    
+    # Build Nodes
+    # Start Node
+    nodes = []
+    
+    # We drift from 0 to Total Length
     current_pos = 0.0
-    current_diameter = start_diameter
+    current_diam = start_diameter
     
-    for i in range(num_sections):
-        # Retrieve values from session_state (or defaults)
-        length = st.session_state.get(f"len_{i}", 100.0)
-        has_shoulder = st.session_state.get(f"sh_{i}", False)
+    # Add Start Node (0.0)
+    shaft.add_node(position=0.0, diameter_right=current_diam)
+    
+    # Process Shoulders
+    for s in valid_shoulders:
+        pos = s['pos']
+        new_diam = s['props'].get('diameter', 20.0)
         
-        # Diameter Logic (Simplified for reconstruction)
-        # We need to know what the UI *would* calculate for next_diameter
-        # or we store next_diameter explicitly?
-        # Ideally, we calculate it dynamically like the UI did to preserve the logic.
+        # Add Node at this position (Left diam = old, Right diam = new)
+        shaft.add_node(position=pos, diameter_left=current_diam, diameter_right=new_diam)
+        current_diam = new_diam
         
-        el_type = st.session_state.get(f"el_{i}_type", "None")
+    # Add End Node
+    shaft.add_node(position=total_len, diameter_left=current_diam)
+    
+    # 2. Components (Gears, Pulleys)
+    # Place them on the shaft. If a node exists nearby (e.g. shoulder), attach to it?
+    # Or Component just resides at a position. 
+    # Shaft.add_node(..., element=comp) handles standardizing node presence.
+    
+    comps = [f for f in features if f['type'] in ["Spur Gear", "Pulley"]]
+    for c in comps:
+        pos = c['pos']
+        if not (0 <= pos <= total_len): continue
         
-        # Diameter Logic (Simplified for reconstruction)
-        # We need to know what the UI *would* calculate for next_diameter
-        # or we store next_diameter explicitly?
-        # Ideally, we calculate it dynamically like the UI did to preserve the logic.
-        
-        is_step_up = (i + 1) <= (num_sections / 2.0)
-        next_diameter = current_diameter
-        
-        # Treat any element presence (Shoulder, Gear, Pulley) as a potential diameter step
-        has_shoulder = el_type != "None"
-        
-        if has_shoulder:
-            next_diameter = get_next_standard_diameter(current_diameter, step_up=is_step_up)
-            if not is_step_up and next_diameter == current_diameter and current_diameter == min(STANDARD_DIAMETERS):
-                 pass # Warning handled in UI
-        
-        current_pos += length
-        
-        # Create Element if applicable
         element = None
-        if el_type == "Spur Gear":
-            # Props
-            diam = st.session_state.get(f"el_{i}_diam", 100.0)
-            angle_contact = st.session_state.get(f"el_{i}_angle", 0.0)
-            
-            element = SpurGear(name="Gear", diameter=diam, contact_angle=angle_contact)
-            
-            # Read manual forces
-            fy = st.session_state.get(f"el_{i}_fy", 0.0)
-            fz = st.session_state.get(f"el_{i}_fz", 0.0)
-            
-            # Add forces to element
-            import math
-            mag = math.sqrt(fy**2 + fz**2)
-            # Angle: 0=+Y, 90=+Z per loads.py interpretation?
-            # loads.py: fy=mag*cos(ang), fz=mag*sin(ang) -> 0 is +Y
-            angle = math.degrees(math.atan2(fz, fy)) 
-            
-            if mag > 1e-6:
-                element.manual_forces.append(RadialForce(magnitude=mag, angle=angle, position=current_pos))
-            # NO Manual Torque for Gear (Calculated)
-                
-        elif el_type == "Pulley":
-            element = Pulley(name="Pulley")
-            # Same Manual Loads logic
-            fy = st.session_state.get(f"el_{i}_fy", 0.0)
-            fz = st.session_state.get(f"el_{i}_fz", 0.0)
-            t = st.session_state.get(f"el_{i}_t", 0.0)
-            
-            import math
-            mag = math.sqrt(fy**2 + fz**2)
-            angle = math.degrees(math.atan2(fz, fy)) 
-            
-            if mag > 1e-6:
-                element.manual_forces.append(RadialForce(magnitude=mag, angle=angle, position=current_pos))
-            if abs(t) > 1e-6:
-                element.manual_torques.append(Torque(magnitude=t, position=current_pos))
-
-        shaft.add_node(position=current_pos, diameter_left=current_diameter, diameter_right=next_diameter, element=element)
-        current_diameter = next_diameter
-
-    # --- 2. Loads ---
-    shaft.forces = []
-    for i in range(config['num_forces']):
-        pos = st.session_state.get(f"f_pos_{i}", 0.0)
-        mag = st.session_state.get(f"f_mag_{i}", 100.0)
-        angle = st.session_state.get(f"f_ang_{i}", 0.0)
-        shaft.forces.append(RadialForce(magnitude=mag, angle=angle, position=pos))
+        props = c['props']
         
-    shaft.torques = []
-    for i in range(config['num_torques']):
-        pos = st.session_state.get(f"t_pos_{i}", 0.0)
-        mag = st.session_state.get(f"t_mag_{i}", 50.0)
-        shaft.torques.append(Torque(magnitude=mag, position=pos))
+        # Handle Load Inputs (Manual vs P/rev)
+        # For MVP we kept 'manual' fields in UI properties
+        
+        if c['type'] == "Spur Gear":
+            element = SpurGear(
+                name="Gear", 
+                diameter=props.get('diameter', 100.0),
+                contact_angle=props.get('angle', 0.0),
+                power=props.get('power', 0.0),
+                rpm=props.get('rpm', 0.0)
+            )
+            
+            # Manual Loads
+            mfy = props.get('manual_fy', 0.0)
+            mfz = props.get('manual_fz', 0.0)
+            import math
+            mag = math.sqrt(mfy**2 + mfz**2)
+            ang = math.degrees(math.atan2(mfz, mfy))
+            if mag > 1e-6:
+                element.manual_forces.append(RadialForce(magnitude=mag, angle=ang, position=pos))
+                
+        elif c['type'] == "Pulley":
+            element = Pulley(
+                name="Pulley",
+                diameter=props.get('diameter', 100.0),
+                power=props.get('power', 0.0),
+                rpm=props.get('rpm', 0.0)
+            )
+            # Manual Loads
+            mfy = props.get('manual_fy', 0.0)
+            mfz = props.get('manual_fz', 0.0)
+            mt = props.get('manual_t', 0.0)
+            mag = math.sqrt(mfy**2 + mfz**2)
+            ang = math.degrees(math.atan2(mfz, mfy))
+            if mag > 1e-6:
+                element.manual_forces.append(RadialForce(magnitude=mag, angle=ang, position=pos))
+            if abs(mt) > 1e-6:
+                element.manual_torques.append(Torque(mean=mt, position=pos))
+        
+        # Add to shaft (this updates existing node if pos matches, or creates new)
+        shaft.add_node(position=pos, element=element)
 
-    # --- 3. Bearings ---
-    # Bearings are just nodes with elements in this model
-    # We need to find the node closest to the bearing position or add one?
-    # The original sidebar added nodes for bearings.
+    # 3. Loads (Points)
+    loads = [f for f in features if f['type'] in ["Radial Force", "Torque"]]
+    for l in loads:
+        pos = l['pos']
+        props = l['props']
+        
+        if l['type'] == "Radial Force":
+            rf = RadialForce(
+                magnitude=props.get('mag', 100.0),
+                angle=props.get('angle', 0.0),
+                position=pos
+            )
+            shaft.forces.append(rf)
+            
+        elif l['type'] == "Torque":
+            # Assume Mean for now unless we add UI for Alt
+            t = Torque(
+                mean=props.get('mag', 50.0),
+                position=pos
+            )
+            shaft.torques.append(t)
+
+    # 4. Supports
+    # Keep explicit inputs for now or allow "Support" feature?
+    # User asked for "Add components where I want".
+    # Supports are critical. Let's keep the dedicated Support section for A/B for now to ensure statics works easily.
+    # (Or add "Bearing" to features? Let's stick to dedicated section for now to match sidebar removal)
+    
     pos_a = st.session_state.get("bearing_a_pos", 0.0)
-    # Default pos_b is end of shaft? We need total length from above loop.
-    total_len = current_pos
     pos_b = st.session_state.get("bearing_b_pos", total_len)
     
-    bearing_a = Bearing(name="Bearing A")
-    bearing_b = Bearing(name="Bearing B")
+    ba = Bearing(name="Bearing A")
+    bb = Bearing(name="Bearing B")
     
-    shaft.add_node(position=pos_a, element=bearing_a)
-    shaft.add_node(position=pos_b, element=bearing_b)
+    shaft.add_node(position=pos_a, element=ba)
+    shaft.add_node(position=pos_b, element=bb)
 
 
+# --- UI Rendering ---
 def render_editor(shaft: Shaft, config: dict):
-    """
-    Renders the editor UI components.
-    Uses a dropdown to select the active editing mode.
-    """
-    with st.expander("Model Editor", expanded=True):
-        mode = st.selectbox("Edit Mode", ["Geometry", "Loads", "Supports"])
+    init_features()
+    
+    with st.expander("Shaft Geometry & Features", expanded=True):
+        st.caption("Define the initial diameter, then add features (Shoulders, Gears, Loads).")
+        st.number_input("Start Diameter (mm)", value=20.0, key="start_diameter")
+        
+        # Add Feature Bar
+        c1, c2 = st.columns([3, 1])
+        new_type = c1.selectbox("Add Feature", ["Shoulder", "Spur Gear", "Pulley", "Radial Force", "Torque"], label_visibility="collapsed")
+        if c2.button("Add"):
+            add_feature(new_type)
+            st.rerun()
+            
         st.markdown("---")
         
-        if mode == "Geometry":
-            _render_geometry_editor(config)
-        elif mode == "Loads":
-            _render_loads_editor(config)
-        elif mode == "Supports":
-            _render_supports_editor(config, shaft)
+        # Render Features List
+        if not st.session_state.features:
+            st.info("No features added. Shaft is a simple cylinder.")
+            
+        for i, feat in enumerate(st.session_state.features):
+            ftype = feat['type']
+            # Header color/icon based on type?
+            icon = "📏" if ftype == "Shoulder" else "⚙️" if ftype == "Spur Gear" else "💿" if ftype == "Pulley" else "⬇️"
+            
+            with st.expander(f"{icon} {ftype} #{i+1}", expanded=True):
+                # Common: Position
+                c_head, c_del = st.columns([5, 1])
+                feat['pos'] = c_head.number_input(f"Position (mm)", value=feat['pos'], min_value=0.0, max_value=config['total_length'], key=f"pos_{feat['id']}")
+                
+                if c_del.button("🗑️", key=f"del_{feat['id']}"):
+                    remove_feature(i)
+                    st.rerun()
+                
+                # Context Props
+                props = feat['props']
+                
+                if ftype == "Shoulder":
+                    props['diameter'] = st.number_input("New Diameter (mm)", value=props.get('diameter', 20.0), key=f"d_{feat['id']}")
+                    
+                elif ftype == "Spur Gear":
+                    c_g1, c_g2 = st.columns(2)
+                    props['diameter'] = c_g1.number_input("Pitch Diam (mm)", value=props.get('diameter', 100.0), key=f"gd_{feat['id']}")
+                    props['angle'] = c_g2.number_input("Contact Angle (deg)", value=props.get('angle', 0.0), key=f"ga_{feat['id']}")
+                    
+                    st.markdown("**Loads (Manual)**")
+                    l1, l2 = st.columns(2)
+                    props['manual_fy'] = l1.number_input("Fy (N)", value=props.get('manual_fy', 0.0), key=f"mfy_{feat['id']}")
+                    props['manual_fz'] = l2.number_input("Fz (N)", value=props.get('manual_fz', 0.0), key=f"mfz_{feat['id']}")
+                    
+                elif ftype == "Pulley":
+                    props['diameter'] = st.number_input("Diameter (mm)", value=props.get('diameter', 100.0), key=f"pd_{feat['id']}")
+                    st.markdown("**Loads (Manual)**")
+                    l1, l2, l3 = st.columns(3)
+                    props['manual_fy'] = l1.number_input("Fy (N)", value=props.get('manual_fy', 0.0), key=f"pfy_{feat['id']}")
+                    props['manual_fz'] = l2.number_input("Fz (N)", value=props.get('manual_fz', 0.0), key=f"pfz_{feat['id']}")
+                    props['manual_t'] = l3.number_input("Torque (Nm)", value=props.get('manual_t', 0.0), key=f"pt_{feat['id']}")
 
-def _render_geometry_editor(config):
-    st.subheader("Shaft Segments")
-    
-    col_start = st.columns(2)
-    col_start[0].selectbox("Start Diameter (mm)", STANDARD_DIAMETERS, index=4, key="start_diameter")
-    
-    num_sections = config['num_sections']
-    
-    # We just render inputs. The 'update_shaft_model' function reads these keys next rerun.
-    for i in range(num_sections):
-        st.markdown(f"**Section {i+1}**")
+                elif ftype == "Radial Force":
+                    c_f1, c_f2 = st.columns(2)
+                    props['mag'] = c_f1.number_input("Magnitude (N)", value=props.get('mag', 100.0), key=f"fmag_{feat['id']}")
+                    props['angle'] = c_f2.number_input("Angle (deg)", value=props.get('angle', 0.0), key=f"fang_{feat['id']}")
+                    
+                elif ftype == "Torque":
+                     props['mag'] = st.number_input("Magnitude (Nm)", value=props.get('mag', 50.0), key=f"tmag_{feat['id']}")
+
+    with st.expander("Fatigue Factors", expanded=False):
+        _render_fatigue_editor(config)
+
+    with st.expander("Supports (Bearings)", expanded=True):
         c1, c2 = st.columns(2)
-        c1.number_input(f"Length (mm)", value=100.0, key=f"len_{i}")
-        
-        # Element Type Selector
-        el_type = c2.selectbox("Element Type", ["None", "Shoulder", "Spur Gear", "Pulley"], key=f"el_{i}_type")
-        
-        # If Gear or Pulley, show load inputs
-        if el_type == "Spur Gear":
-            st.markdown(f"**Spur Gear Properties**")
-            gc1, gc2 = st.columns(2)
-            gc1.number_input("Pitch Diameter (mm)", value=100.0, key=f"el_{i}_diam")
-            gc2.number_input("Contact Angle (deg)", value=0.0, key=f"el_{i}_angle", help="0=Right, 90=Top")
-            
-            st.markdown(f"**Loads acting on Gear**")
-            lc1, lc2 = st.columns(2)
-            lc1.number_input("Fy (N) [Vertical]", value=0.0, key=f"el_{i}_fy")
-            lc2.number_input("Fz (N) [Horizontal]", value=0.0, key=f"el_{i}_fz")
-            
-        elif el_type == "Pulley":
-            st.markdown(f"**Pulley Loads**")
-            lc1, lc2, lc3 = st.columns(3)
-            lc1.number_input("Fy (N)", value=0.0, key=f"el_{i}_fy", help="Vertical Force")
-            lc2.number_input("Fz (N)", value=0.0, key=f"el_{i}_fz", help="Horizontal Force")
-            lc3.number_input("Torque (Nm)", value=0.0, key=f"el_{i}_t")
-        
-def _render_loads_editor(config):
-    st.subheader("Radial Forces")
-    if config['num_forces'] == 0:
-        st.info("Increase 'Number of Radial Forces' in Sidebar to add loads.")
-    
-    for i in range(config['num_forces']):
-        st.markdown(f"**Force {i+1}**")
-        cols = st.columns(3)
-        cols[0].number_input(f"Pos (mm)", value=0.0, key=f"f_pos_{i}")
-        cols[1].number_input(f"Mag (N)", value=100.0, key=f"f_mag_{i}")
-        cols[2].number_input(f"Angle (deg)", value=0.0, key=f"f_ang_{i}")
+        st.session_state['bearing_a_pos'] = c1.number_input("Bearing A Position (mm)", value=st.session_state.get('bearing_a_pos', 0.0))
+        st.session_state['bearing_b_pos'] = c2.number_input("Bearing B Position (mm)", value=st.session_state.get('bearing_b_pos', config['total_length']))
 
-    st.markdown("---")
-    st.subheader("Torques")
-    if config['num_torques'] == 0:
-        st.info("Increase 'Number of Torques' in Sidebar to add torques.")
-        
-    for i in range(config['num_torques']):
-        st.markdown(f"**Torque {i+1}**")
-        cols = st.columns(2)
-        cols[0].number_input(f"Pos (mm)", value=0.0, key=f"t_pos_{i}")
-        cols[1].number_input(f"Mag (N.m)", value=50.0, key=f"t_mag_{i}")
 
-def _render_supports_editor(config, shaft):
-    st.subheader("Bearings")
+def _render_fatigue_editor(config):
+    """
+    Renders inputs for Fatigue Correction Factors.
+    """
     c1, c2 = st.columns(2)
-    # Default value logic to avoid 0.0 jumps if uninitialized?
-    # Streamlit defaults key to 'value' on first run.
-    # We used current_pos as default for B in sidebar.
-    # We can try to approximate.
-    c1.number_input("Bearing A Position (mm)", value=0.0, key="bearing_a_pos")
-    c2.number_input("Bearing B Position (mm)", value=shaft.get_total_length(), key="bearing_b_pos")
+    c1.selectbox("Surface Finish", 
+                 ['usinado', 'retificado', 'laminado a frio', 'laminado a quente', 'forjado'], 
+                 index=0, key="fatigue_surface")
+    
+    c2.selectbox("Reliability", 
+                 ['50%', '90%', '95%', '99%', '99.9%', '99.99%', '99.999%', '99.9999%'], 
+                 index=3, key="fatigue_reliability") # Default 99%
+                 
+    c3, c4 = st.columns(2)
+    c3.number_input("Operating Temperature (°C)", value=20.0, step=10.0, key="fatigue_temp")
+    c4.number_input("Misc. Factor (kf)", value=1.0, min_value=0.1, max_value=2.0, step=0.05, key="fatigue_kf", help="Miscellaneous effects (corrosion, plating, etc). Default 1.0")

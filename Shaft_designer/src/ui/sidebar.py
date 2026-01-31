@@ -16,13 +16,13 @@ def render_sidebar(shaft: Shaft) -> dict:
     st.sidebar.markdown("---")
     st.sidebar.subheader("Model Dimensions")
     
-    # Global Counts
-    num_sections = st.sidebar.number_input("Number of Sections", min_value=1, max_value=20, value=3)
-    num_forces = st.sidebar.number_input("Number of Radial Forces", min_value=0, max_value=10, value=0)
-    num_torques = st.sidebar.number_input("Number of Torques", min_value=0, max_value=5, value=0)
+    # Global Config
+    total_len = st.sidebar.number_input("Total Shaft Length (mm)", min_value=10.0, max_value=5000.0, value=500.0, step=10.0)
     
+    st.sidebar.markdown("---")
+    safety_factor = st.sidebar.number_input("Safety Factor (n)", min_value=1.1, max_value=10.0, value=2.0, step=0.1)
+
     return {
-        "num_sections": int(num_sections),
-        "num_forces": int(num_forces),
-        "num_torques": int(num_torques)
+        "total_length": float(total_len),
+        "safety_factor": float(safety_factor)
     }
