@@ -38,20 +38,12 @@ def render_sidebar(shaft: Shaft):
         for i in range(int(num_sections)):
             st.markdown(f"**Section {i+1}**")
             
-            # Smart Guessing Logic Direction
-            # If we are in the first half, we step UP. If in the second half, we step DOWN.
-            # For odd numbers, the middle section typically steps up then down? 
-            # Let's assume the "center" is the midpoint of the section count.
-            # i ranges from 0 to n-1. 
-            # Local center is (n-1)/2. 
-            # If i < (n-1)/2 -> Up. 
-            # If i >= (n-1)/2 -> Down.
-            # Example n=3: Center index 1. 0 -> Up. 1 -> Down? Or 1 -> Up?
-            # Let's stick to: First half excludes the exact middle if odd? 
-            # Let's try: if i < n/2: Up. Else: Down.
-            # n=3: 0 < 1.5 (Up). 1 < 1.5 (Up). 2 > 1.5 (Down). 
-            # Result: D, D+, D++, D+ (Steps: Up, Up, Down). Looks like a center-heavy shaft. Good.
-            is_step_up = i < (num_sections / 2.0)
+            # Correct Logic:
+            # The shoulder is at the END of section i (Node i+1).
+            # We compare the transition node index (i+1) with the shaft center.
+            # If transition is before or at center -> Step UP.
+            # If transition is after center -> Step DOWN.
+            is_step_up = (i + 1) <= (num_sections / 2.0)
             
             c1, c2 = st.columns(2)
             length = c1.number_input(f"Length (mm)", value=100.0, key=f"len_{i}")

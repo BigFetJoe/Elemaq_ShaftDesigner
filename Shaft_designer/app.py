@@ -3,6 +3,7 @@ import os
 from src.models.geometry import Shaft
 from src.ui.sidebar import render_sidebar
 from src.ui.visualization import plot_shaft_3d, plot_diagrams
+import plotly.graph_objects as go
 
 st.set_page_config(page_title="Shaft Designer", layout="wide", page_icon="⚙️")
 
