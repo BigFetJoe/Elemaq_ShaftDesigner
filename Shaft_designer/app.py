@@ -60,7 +60,7 @@ def main():
         run_analysis = st.button("Calculate Analysis", type="primary", use_container_width=True)
         
     with col_anal_2:
-        auto_dim = st.button("Auto-Dimension Shaft ✨", type="secondary", use_container_width=True, help="Automatically adjusts diameters to meet Safety Factor")
+        auto_dim = st.button("Auto-Dimension Shaft", type="secondary", use_container_width=True, help="Automatically adjusts diameters to meet Safety Factor")
         
     if auto_dim:
         with st.spinner("Optimizing shaft dimensions..."):

@@ -10,11 +10,11 @@ def init_features():
     if "features" not in st.session_state:
         st.session_state.features = []
 
-def add_feature(ftype):
+def add_feature(ftype, pos=0.0):
     feat = {
         "id": str(uuid.uuid4()),
         "type": ftype,
-        "pos": 0.0,
+        "pos": pos,
         "props": {}
     }
     # Initialize default props based on type
@@ -100,6 +100,7 @@ def update_shaft_model(shaft: Shaft, config: dict):
             element = SpurGear(
                 name="Gear", 
                 diameter=props.get('diameter', 100.0),
+                width=props.get('width', 20.0),
                 contact_angle=props.get('angle', 0.0),
                 power=props.get('power', 0.0),
                 rpm=props.get('rpm', 0.0)
@@ -118,6 +119,7 @@ def update_shaft_model(shaft: Shaft, config: dict):
             element = Pulley(
                 name="Pulley",
                 diameter=props.get('diameter', 100.0),
+                width=props.get('width', 20.0),
                 power=props.get('power', 0.0),
                 rpm=props.get('rpm', 0.0)
             )
@@ -182,10 +184,12 @@ def render_editor(shaft: Shaft, config: dict):
         st.number_input("Start Diameter (mm)", value=20.0, key="start_diameter")
         
         # Add Feature Bar
-        c1, c2 = st.columns([3, 1])
+        # Add Feature Bar
+        c1, c2, c3 = st.columns([3, 1, 1])
         new_type = c1.selectbox("Add Feature", ["Shoulder", "Spur Gear", "Pulley", "Radial Force", "Torque"], label_visibility="collapsed")
-        if c2.button("Add"):
-            add_feature(new_type)
+        new_pos = c2.number_input("Position", value=0.0, step=10.0, min_value=0.0, max_value=config['total_length'], label_visibility="collapsed")
+        if c3.button("Add"):
+            add_feature(new_type, pos=new_pos)
             st.rerun()
             
         st.markdown("---")
@@ -196,10 +200,7 @@ def render_editor(shaft: Shaft, config: dict):
             
         for i, feat in enumerate(st.session_state.features):
             ftype = feat['type']
-            # Header color/icon based on type?
-            icon = "📏" if ftype == "Shoulder" else "⚙️" if ftype == "Spur Gear" else "💿" if ftype == "Pulley" else "⬇️"
-            
-            with st.expander(f"{icon} {ftype} #{i+1}", expanded=True):
+            with st.expander(f"{ftype} #{i+1}", expanded=True):
                 # Common: Position
                 c_head, c_del = st.columns([5, 1])
                 feat['pos'] = c_head.number_input(f"Position (mm)", value=feat['pos'], min_value=0.0, max_value=config['total_length'], key=f"pos_{feat['id']}")
@@ -215,9 +216,10 @@ def render_editor(shaft: Shaft, config: dict):
                     props['diameter'] = st.number_input("New Diameter (mm)", value=props.get('diameter', 20.0), key=f"d_{feat['id']}")
                     
                 elif ftype == "Spur Gear":
-                    c_g1, c_g2 = st.columns(2)
+                    c_g1, c_g2, c_g3 = st.columns(3)
                     props['diameter'] = c_g1.number_input("Pitch Diam (mm)", value=props.get('diameter', 100.0), key=f"gd_{feat['id']}")
-                    props['angle'] = c_g2.number_input("Contact Angle (deg)", value=props.get('angle', 0.0), key=f"ga_{feat['id']}")
+                    props['width'] = c_g2.number_input("Width (mm)", value=props.get('width', 20.0), key=f"gw_{feat['id']}")
+                    props['angle'] = c_g3.number_input("Contact Angle (deg)", value=props.get('angle', 0.0), key=f"ga_{feat['id']}")
                     
                     st.markdown("**Loads (Manual)**")
                     l1, l2 = st.columns(2)
@@ -225,7 +227,10 @@ def render_editor(shaft: Shaft, config: dict):
                     props['manual_fz'] = l2.number_input("Fz (N)", value=props.get('manual_fz', 0.0), key=f"mfz_{feat['id']}")
                     
                 elif ftype == "Pulley":
-                    props['diameter'] = st.number_input("Diameter (mm)", value=props.get('diameter', 100.0), key=f"pd_{feat['id']}")
+                    c_p1, c_p2 = st.columns(2)
+                    props['diameter'] = c_p1.number_input("Diameter (mm)", value=props.get('diameter', 100.0), key=f"pd_{feat['id']}")
+                    props['width'] = c_p2.number_input("Width (mm)", value=props.get('width', 20.0), key=f"pw_{feat['id']}")
+                    
                     st.markdown("**Loads (Manual)**")
                     l1, l2, l3 = st.columns(3)
                     props['manual_fy'] = l1.number_input("Fy (N)", value=props.get('manual_fy', 0.0), key=f"pfy_{feat['id']}")

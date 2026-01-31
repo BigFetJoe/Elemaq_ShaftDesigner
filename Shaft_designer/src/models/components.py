@@ -55,6 +55,7 @@ class SpurGear(PowerTransmissionComponent):
     Generates Tangential and Radial forces based on Power/RPM or manual Torque.
     """
     diameter: float = 100.0 # mm (Pitch Diameter)
+    width: float = 20.0 # mm
     pressure_angle: float = 20.0 # degrees
     contact_angle: float = 0.0 # degrees ("mesh" angle, 0=Right? User convention)
     
@@ -106,6 +107,7 @@ class Pulley(PowerTransmissionComponent):
     Generates forces based on sheath tension.
     """
     diameter: float = 100.0 # mm
+    width: float = 20.0 # mm
     preload_factor: float = 3.0 # Ratio F1/F2 (Tight/Slack)
     wrap_angle: float = 180.0 # degrees (Not strictly used in basic F1/F2 ratio model but good context)
     belt_angle: float = 90.0 # Direction of the belt pull (0 = Right, 90 = Up)
